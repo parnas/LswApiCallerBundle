@@ -12,30 +12,33 @@ abstract class CurlCall implements ApiCallInterface
 {
     protected $url;
     protected $name;
-    protected $requestData;
     protected $requestObject;
+    protected $requestHeaders;
+    protected $responseRaw;
     protected $responseData;
     protected $responseObject;
+    protected $responseHeaders;
     protected $status;
-    protected $asAssociativeArray;
     protected $engine;
     protected $curlOptions;
+    protected $method;
 
     /**
      * Class constructor
      *
-     * @param string $url                API url
-     * @param object $requestObject      Request
-     * @param bool   $asAssociativeArray Return associative array
+     * @param string $url               API url
+     * @param string $method            API method
+     * @param object $requestObject     Request data
+     * @param object $engine            Request engine
      */
-    public function __construct($url,$requestObject,$asAssociativeArray=false)
+    public function __construct($url, $method = '', $requestObject = array(), Curl $engine = null)
     {
         $this->url = $url;
-        $this->requestObject = $requestObject;
-        $this->asAssociativeArray = $asAssociativeArray;
-        $this->generateRequestData();
+        $this->method = $method;
 
-        $this->engine = new Curl();
+        $this->requestObject = $requestObject;
+
+        $this->engine = $engine ?: new Curl();
     }
 
     /**
@@ -59,7 +62,7 @@ abstract class CurlCall implements ApiCallInterface
      */
     public function getRequestData()
     {
-        return $this->requestData;
+        return http_build_query($this->requestObject);
     }
 
     /**
@@ -73,11 +76,19 @@ abstract class CurlCall implements ApiCallInterface
     /**
      * {@inheritdoc}
      */
+    public function getRequestHeaders()
+    {
+        return $this->requestHeaders;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     public function getRequestObjectRepresentation()
     {
         $dumper = new \Symfony\Component\Yaml\Dumper();
 
-        return $dumper->dump(json_decode(json_encode($this->requestObject), true), 100);
+        return $dumper->dump($this->requestObject, 100);
     }
 
     /**
@@ -99,11 +110,19 @@ abstract class CurlCall implements ApiCallInterface
     /**
      * {@inheritdoc}
      */
+    public function getResponseHeaders()
+    {
+        return $this->responseHeaders;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     public function getResponseObjectRepresentation()
     {
         $dumper = new \Symfony\Component\Yaml\Dumper();
 
-        return $dumper->dump(json_decode(json_encode($this->responseObject), true), 100);
+        return $dumper->dump($this->responseObject, 100);
     }
 
     /**
@@ -173,35 +192,19 @@ abstract class CurlCall implements ApiCallInterface
     }
 
     /**
-     * Execute the call
-     *
-     * @param array  $options      Array of options
-     *
-     * @return mixed Response
+     * {@inheritdoc}
      */
-    public function execute($options = array())
+    public function execute(array $options = array(), $parser = null)
     {
         $this->setCurlOptions($options);
         $this->makeRequest();
-
+        $this->assignResponseValues();
         $this->status = $this->engine->getinfo(CURLINFO_HTTP_CODE);
-
+        $this->requestHeaders = $this->engine->getinfo(CURLINFO_HEADER_OUT);
+        $this->responseObject = ($parser) ? $parser($this->responseData) : $this->responseData;
         $result = $this->getResponseObject();
 
-        $this->clearCurlOptions();
-
         return $result;
-    }
-
-    /**
-     * Clearing curl options so they will not transfer to the next request
-     */
-    protected function clearCurlOptions()
-    {
-        foreach($this->curlOptions as $key => $option) {
-            $this->curlOptions[$key] = null;
-        }
-        $this->engine->setoptArray($this->curlOptions);
     }
 
     /**
@@ -211,7 +214,12 @@ abstract class CurlCall implements ApiCallInterface
      */
     protected function setCurlOptions($options = array())
     {
-        $this->curlOptions = $this->parseCurlOptions($options);
+        $params = array();
+        $params['returntransfer'] = true;
+        $params['header'] = true;
+        $params['curlinfo_header_out'] = true;
+
+        $this->curlOptions = $this->parseCurlOptions(array_merge($params, $options));
         $this->engine->setoptArray($this->curlOptions);
     }
 
@@ -231,8 +239,10 @@ abstract class CurlCall implements ApiCallInterface
         $prefix = 'CURLOPT_';
         foreach ($config as $key => $value) {
             $constantName = $prefix . strtoupper($key);
-            if (!defined($constantName)) {
-                $messageTemplate  = "Invalid option '%s' in apicaller.config parameter. ";
+            // Weird check is because of CURLINFO_HEADER_OUT. Note the "CURLINFO_".
+            // That also means that user can specify options with CURLOPT_ prefix directly.
+            if (!defined($constantName) && ($constantName = strtoupper($key)) && !defined($constantName)) {
+                $messageTemplate  = "Invalid option '%s' in apicaller.config.engine parameter. ";
                 $messageTemplate .= "Use options (from the cURL section in the PHP manual) without prefix '%s'";
                 $message = sprintf($messageTemplate, $key, $prefix);
                 throw new \Exception($message);
@@ -246,17 +256,25 @@ abstract class CurlCall implements ApiCallInterface
     /**
      * {@inheritdoc}
      */
-    public function generateRequestData()
+    protected function makeRequest()
     {
-        $this->requestData = http_build_query($this->requestObject);
+        $this->responseRaw = $this->engine->exec();
     }
 
     /**
-     * {@inheritdoc}
+     * Parses raw curl response into header and body (data)
      */
-    public function makeRequest()
+    protected function assignResponseValues()
     {
-        $this->responseData = $this->engine->exec();
-    }
+        $headers = $body = '';
 
+        if($this->responseRaw) {
+            $parts = explode("\r\n\r\nHTTP/", $this->responseRaw);
+            $parts = (count($parts) > 1 ? 'HTTP/' : '').array_pop($parts);
+            list($headers, $body) = explode("\r\n\r\n", $parts, 2);
+        }
+
+        $this->responseHeaders = $headers;
+        $this->responseData = $body;
+    }
 }
