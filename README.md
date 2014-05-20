@@ -205,3 +205,5 @@ This bundle is under the MIT license.
 The "wall-socket" icon in the web debug toolbar is part of the Picas icon set (official website: http://www.picasicons.com).
 The icon is licensed and may only be used to identifying the LswApiCallerBundle in the Symfony2 web debug toolbar.
 All ownership and copyright of this icon remain the property of Rok Benedik.
+
+https://www.codeship.io/projects/42a68b60-c22d-0131-c9e3-1aad27fa0fd0/status
